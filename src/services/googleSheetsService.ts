@@ -83,10 +83,11 @@ class GoogleSheetsService {
         const normalized: any = { ...lead };
         
         // Map common variations to our expected keys (camelCase)
+        // We are more specific here to avoid "Date" overwriting "Wedding Date"
         const mappings: Record<string, string[]> = {
-          clientName: ['clientname', 'Name', 'Client', 'Customer Name', 'client_name'],
+          clientName: ['clientname', 'Client Name', 'Customer Name', 'client_name'],
           number: ['number', 'Phone', 'Mobile', 'Contact', 'phone_number'],
-          weddingDate: ['weddingdate', 'Date', 'Wedding Date', 'Event Date', 'wedding_date'],
+          weddingDate: ['weddingdate', 'Wedding Date', 'Event Date', 'wedding_date'],
           location: ['location', 'City', 'Place', 'Venue'],
           budget: ['budget', 'Price', 'Amount', 'Cost'],
           leadFrom: ['leadfrom', 'Source', 'Lead From', 'Platform'],
@@ -95,7 +96,8 @@ class GoogleSheetsService {
           wpAutomation: ['wpautomation'],
           mailId: ['mailid'],
           aiScore: ['aiscore'],
-          aiSummary: ['aisummary']
+          aiSummary: ['aisummary'],
+          date: ['date', 'Entry Date', 'Created At']
         };
 
         Object.entries(mappings).forEach(([targetKey, variations]) => {
@@ -140,15 +142,15 @@ class GoogleSheetsService {
     if (!url) return false;
 
     try {
-      const response = await fetch(url, {
+      await fetch(url, {
         method: "POST",
-        mode: "no-cors", // Apps Script often requires no-cors for simple POSTs
+        mode: "no-cors",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ action: "saveLead", lead }),
       });
-      return true; // no-cors doesn't allow reading response, but we assume success if no error thrown
+      return true;
     } catch (error) {
       console.error("Failed to save lead:", error);
       return false;
@@ -201,6 +203,11 @@ export const sheetsService = new GoogleSheetsService();
 // APPS SCRIPT TEMPLATE (For the user to copy-paste into Google Apps Script)
 export const APPS_SCRIPT_TEMPLATE = `
 function doGet(e) {
+  // Facebook Webhook Verification
+  if (e.parameter['hub.mode'] == 'subscribe' && e.parameter['hub.verify_token']) {
+    return ContentService.createTextOutput(e.parameter['hub.challenge']);
+  }
+
   var action = e.parameter.action;
   if (action == 'getLeads') {
     return ContentService.createTextOutput(JSON.stringify({ leads: getLeadsFromSheet() }))
@@ -212,7 +219,13 @@ function doGet(e) {
 }
 
 function doPost(e) {
-  var data = JSON.parse(e.postData.contents || '{}');
+  var data = {};
+  try {
+    data = JSON.parse(e.postData.contents || '{}');
+  } catch (err) {
+    // Handle form-encoded or other formats if necessary
+  }
+  
   var action = data.action || e.parameter.action;
   
   // Facebook Webhook Support
@@ -267,18 +280,26 @@ function saveConfigToSheet(config) {
 }
 
 function handleWebhook(contents) {
-  var data = JSON.parse(contents);
-  // Basic FB Lead Ads mapping (customize based on your form fields)
-  var lead = {
-    id: 'fb_' + Date.now(),
-    date: new Date().toISOString().split('T')[0],
-    clientName: data.full_name || data.name || 'FB Lead',
-    number: data.phone_number || '',
-    leadFrom: 'FB Ads',
-    color: 'White',
-    notes: []
-  };
-  saveLeadToSheet(lead);
+  try {
+    var data = JSON.parse(contents);
+    // Basic FB Lead Ads mapping (customize based on your form fields)
+    var lead = {
+      id: 'fb_' + (data.leadgen_id || Date.now()),
+      date: new Date().toISOString().split('T')[0],
+      clientName: data.full_name || data.name || 'New FB Lead',
+      number: data.phone_number || '',
+      leadFrom: 'Facebook Ads',
+      color: 'White',
+      notes: JSON.stringify([{
+        id: 'note_' + Date.now(),
+        text: 'Lead received from Facebook Ads.',
+        timestamp: new Date().toISOString()
+      }])
+    };
+    saveLeadToSheet(lead);
+  } catch (e) {
+    Logger.log('Webhook Error: ' + e.message);
+  }
 }
 
 function saveLeadToSheet(lead) {
@@ -290,9 +311,51 @@ function saveLeadToSheet(lead) {
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var row = headers.map(function(h) {
     var key = h.toString().toLowerCase().replace(/ /g, '');
-    if (key === 'notes') return JSON.stringify(lead.notes || []);
-    return lead[key] || lead[h] || '';
+    var value = lead[key] || lead[h] || findKeyCaseInsensitive(lead, key) || '';
+    if (key === 'notes' && typeof value !== 'string') return JSON.stringify(value || []);
+    return value;
   });
   sheet.appendRow(row);
+}
+
+function updateLeadInSheet(lead) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Leads');
+  if (!sheet) return;
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][0] == lead.id) {
+      var row = headers.map(function(h) {
+        var key = h.toString().toLowerCase().replace(/ /g, '');
+        var value = lead[key] || lead[h] || findKeyCaseInsensitive(lead, key) || '';
+        if (key === 'notes' && typeof value !== 'string') return JSON.stringify(value || []);
+        return value;
+      });
+      sheet.getRange(i + 1, 1, 1, row.length).setValues([row]);
+      break;
+    }
+  }
+}
+
+function deleteLeadFromSheet(id) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Leads');
+  if (!sheet) return;
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][0] == id) {
+      sheet.deleteRow(i + 1);
+      break;
+    }
+  }
+}
+
+function findKeyCaseInsensitive(obj, key) {
+  var keys = Object.keys(obj);
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i].toLowerCase() === key.toLowerCase()) {
+      return obj[keys[i]];
+    }
+  }
+  return null;
 }
 `;
