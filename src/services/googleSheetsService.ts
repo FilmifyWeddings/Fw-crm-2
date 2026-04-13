@@ -44,22 +44,28 @@ class GoogleSheetsService {
       const data = await response.json();
       const rawLeads = data.leads || [];
       
-      // 2. Normalize data (handle common column name variations)
+      // 2. Normalize data (handle common column name variations and lowercase keys)
       const normalizedLeads = rawLeads.map((lead: any) => {
         const normalized: any = { ...lead };
         
-        // Map common variations to our expected keys
+        // Map common variations to our expected keys (camelCase)
         const mappings: Record<string, string[]> = {
-          clientName: ['Name', 'Client', 'Customer Name', 'client_name'],
-          number: ['Phone', 'Number', 'Mobile', 'Contact', 'phone_number'],
-          weddingDate: ['Date', 'Wedding Date', 'Event Date', 'wedding_date'],
-          location: ['City', 'Place', 'Venue', 'Location'],
-          budget: ['Price', 'Amount', 'Budget', 'Cost'],
-          leadFrom: ['Source', 'Lead From', 'Platform'],
-          designatedTo: ['Assignee', 'Team', 'Designated To', 'Staff'],
+          clientName: ['clientname', 'Name', 'Client', 'Customer Name', 'client_name'],
+          number: ['number', 'Phone', 'Mobile', 'Contact', 'phone_number'],
+          weddingDate: ['weddingdate', 'Date', 'Wedding Date', 'Event Date', 'wedding_date'],
+          location: ['location', 'City', 'Place', 'Venue'],
+          budget: ['budget', 'Price', 'Amount', 'Cost'],
+          leadFrom: ['leadfrom', 'Source', 'Lead From', 'Platform'],
+          designatedTo: ['designatedto', 'Assignee', 'Team', 'Staff'],
+          afterQuote: ['afterquote'],
+          wpAutomation: ['wpautomation'],
+          mailId: ['mailid'],
+          aiScore: ['aiscore'],
+          aiSummary: ['aisummary']
         };
 
         Object.entries(mappings).forEach(([targetKey, variations]) => {
+          // If the target key is missing or empty, try to find it in variations
           if (!normalized[targetKey]) {
             const foundKey = Object.keys(lead).find(k => 
               variations.some(v => v.toLowerCase() === k.toLowerCase())
@@ -69,6 +75,18 @@ class GoogleSheetsService {
             }
           }
         });
+
+        // Ensure notes is always an array
+        if (typeof normalized.notes === 'string') {
+          try {
+            normalized.notes = JSON.parse(normalized.notes);
+          } catch (e) {
+            normalized.notes = [];
+          }
+        }
+        if (!Array.isArray(normalized.notes)) {
+          normalized.notes = [];
+        }
 
         return normalized as Lead;
       });
