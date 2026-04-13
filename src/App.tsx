@@ -310,9 +310,17 @@ const SpreadsheetView = ({
                       <input 
                         type={col.type === 'number' ? 'number' : 'text'}
                         className="w-full h-10 px-3 bg-transparent border-none focus:ring-2 focus:ring-primary/20 text-sm"
-                        value={lead[col.id] || ''}
-                        onChange={(e) => onUpdateField(lead.id, col.id, e.target.value)}
-                        onBlur={(e) => onUpdateField(lead.id, col.id, e.target.value)}
+                        defaultValue={lead[col.id] || ''}
+                        onBlur={(e) => {
+                          if (e.target.value !== (lead[col.id] || '')) {
+                            onUpdateField(lead.id, col.id, e.target.value);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
                       />
                     )}
                   </td>
@@ -368,43 +376,36 @@ function AppContent() {
   }, []);
 
   const loadInitialData = async () => {
+    // 1. Load cached leads immediately for instant UI
+    const cachedLeads = localStorage.getItem("LENSFLOW_CACHED_LEADS");
+    if (cachedLeads) {
+      try {
+        const parsed = JSON.parse(cachedLeads);
+        if (parsed && parsed.length > 0) {
+          setLeads(parsed);
+        }
+      } catch (e) {}
+    }
+
     setIsLoading(true);
     
-    // Load Config first
+    // 2. Load Config
     const config = await sheetsService.fetchConfig();
     if (config) {
       if (config.columns) setColumns(config.columns);
       if (config.statuses) setStatuses(config.statuses);
     }
 
-    // Load Leads
-    await loadLeads();
+    // 3. Load fresh Leads
+    const freshLeads = await sheetsService.fetchLeads();
+    setLeads(freshLeads);
     setIsLoading(false);
   };
 
   const loadLeads = async () => {
-    // 1. Check if we have cached data to show immediately
-    const cachedData = localStorage.getItem("LENSFLOW_CACHED_LEADS");
-    if (cachedData) {
-      try {
-        const parsed = JSON.parse(cachedData);
-        if (parsed.length > 0) {
-          setLeads(parsed);
-          // If we have cache, we don't show the full-screen loader
-          // but we might still want to fetch fresh data in the background
-        } else {
-          setIsLoading(true);
-        }
-      } catch (e) {
-        setIsLoading(true);
-      }
-    } else {
-      setIsLoading(true);
-    }
-
+    // This is now redundant but kept for compatibility if called elsewhere
     const data = await sheetsService.fetchLeads();
     setLeads(data);
-    setIsLoading(false);
   };
 
   const handleAddLead = async (e: React.FormEvent<HTMLFormElement>) => {
