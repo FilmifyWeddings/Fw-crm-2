@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Lead, Note } from "../types";
+import { Lead, Note, AppConfig, StatusConfig } from "../types";
 
 // This service handles communication with a Google Apps Script Web App
 // The user needs to deploy an Apps Script with doGet and doPost handlers.
@@ -21,6 +21,40 @@ class GoogleSheetsService {
       this.webAppUrl = localStorage.getItem("LENSFLOW_WEBAPP_URL") || "";
     }
     return this.webAppUrl;
+  }
+
+  async fetchConfig(): Promise<AppConfig | null> {
+    const url = this.getWebAppUrl();
+    if (!url) return null;
+
+    try {
+      const response = await fetch(`${url}?action=getConfig`);
+      const data = await response.json();
+      return data.config || null;
+    } catch (error) {
+      console.error("Failed to fetch config:", error);
+      return null;
+    }
+  }
+
+  async saveConfig(config: AppConfig): Promise<boolean> {
+    const url = this.getWebAppUrl();
+    if (!url) return false;
+
+    try {
+      await fetch(url, {
+        method: "POST",
+        mode: "no-cors",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "saveConfig", config }),
+      });
+      return true;
+    } catch (error) {
+      console.error("Failed to save config:", error);
+      return false;
+    }
   }
 
   async fetchLeads(): Promise<Lead[]> {
@@ -171,25 +205,94 @@ function doGet(e) {
   if (action == 'getLeads') {
     return ContentService.createTextOutput(JSON.stringify({ leads: getLeadsFromSheet() }))
       .setMimeType(ContentService.MimeType.JSON);
+  } else if (action == 'getConfig') {
+    return ContentService.createTextOutput(JSON.stringify({ config: getConfigFromSheet() }))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
 function doPost(e) {
-  var data = JSON.parse(e.postData.contents);
-  var action = data.action;
+  var data = JSON.parse(e.postData.contents || '{}');
+  var action = data.action || e.parameter.action;
   
+  // Facebook Webhook Support
+  if (action == 'webhook' || (!action && e.postData.contents)) {
+    handleWebhook(e.postData.contents);
+    return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
   if (action == 'saveLead') {
     saveLeadToSheet(data.lead);
   } else if (action == 'updateLead') {
     updateLeadInSheet(data.lead);
   } else if (action == 'deleteLead') {
     deleteLeadFromSheet(data.id);
+  } else if (action == 'saveConfig') {
+    saveConfigToSheet(data.config);
   }
   
   return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// Helper functions to interact with SpreadsheetApp...
-// (I will provide a more detailed version in the UI)
+function getLeadsFromSheet() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Leads');
+  if (!sheet) return [];
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var leads = [];
+  for (var i = 1; i < data.length; i++) {
+    var lead = {};
+    for (var j = 0; j < headers.length; j++) {
+      var key = headers[j].toString().toLowerCase().replace(/ /g, '');
+      lead[key] = data[i][j];
+    }
+    leads.push(lead);
+  }
+  return leads;
+}
+
+function getConfigFromSheet() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Config');
+  if (!sheet) return null;
+  var data = sheet.getRange(1, 1).getValue();
+  return data ? JSON.parse(data) : null;
+}
+
+function saveConfigToSheet(config) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Config');
+  if (!sheet) sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet('Config');
+  sheet.getRange(1, 1).setValue(JSON.stringify(config));
+}
+
+function handleWebhook(contents) {
+  var data = JSON.parse(contents);
+  // Basic FB Lead Ads mapping (customize based on your form fields)
+  var lead = {
+    id: 'fb_' + Date.now(),
+    date: new Date().toISOString().split('T')[0],
+    clientName: data.full_name || data.name || 'FB Lead',
+    number: data.phone_number || '',
+    leadFrom: 'FB Ads',
+    color: 'White',
+    notes: []
+  };
+  saveLeadToSheet(lead);
+}
+
+function saveLeadToSheet(lead) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Leads');
+  if (!sheet) {
+    sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet('Leads');
+    sheet.appendRow(['ID', 'Date', 'Lead From', 'Color', 'Client Name', 'Number', 'Wedding Date', 'Month', 'Designated to', 'After Quote', 'WP Automation', 'Location', 'Budget', 'Function', 'Mail ID', 'Notes', 'AI Score', 'AI Summary']);
+  }
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var row = headers.map(function(h) {
+    var key = h.toString().toLowerCase().replace(/ /g, '');
+    if (key === 'notes') return JSON.stringify(lead.notes || []);
+    return lead[key] || lead[h] || '';
+  });
+  sheet.appendRow(row);
+}
 `;
