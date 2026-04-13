@@ -25,15 +25,61 @@ class GoogleSheetsService {
 
   async fetchLeads(): Promise<Lead[]> {
     const url = this.getWebAppUrl();
-    if (!url) return [];
+    
+    // 1. Try to return cached data immediately
+    const cachedData = localStorage.getItem("LENSFLOW_CACHED_LEADS");
+    let initialLeads: Lead[] = [];
+    if (cachedData) {
+      try {
+        initialLeads = JSON.parse(cachedData);
+      } catch (e) {
+        console.error("Failed to parse cached leads");
+      }
+    }
+
+    if (!url) return initialLeads;
 
     try {
       const response = await fetch(`${url}?action=getLeads`);
       const data = await response.json();
-      return data.leads || [];
+      const rawLeads = data.leads || [];
+      
+      // 2. Normalize data (handle common column name variations)
+      const normalizedLeads = rawLeads.map((lead: any) => {
+        const normalized: any = { ...lead };
+        
+        // Map common variations to our expected keys
+        const mappings: Record<string, string[]> = {
+          clientName: ['Name', 'Client', 'Customer Name', 'client_name'],
+          number: ['Phone', 'Number', 'Mobile', 'Contact', 'phone_number'],
+          weddingDate: ['Date', 'Wedding Date', 'Event Date', 'wedding_date'],
+          location: ['City', 'Place', 'Venue', 'Location'],
+          budget: ['Price', 'Amount', 'Budget', 'Cost'],
+          leadFrom: ['Source', 'Lead From', 'Platform'],
+          designatedTo: ['Assignee', 'Team', 'Designated To', 'Staff'],
+        };
+
+        Object.entries(mappings).forEach(([targetKey, variations]) => {
+          if (!normalized[targetKey]) {
+            const foundKey = Object.keys(lead).find(k => 
+              variations.some(v => v.toLowerCase() === k.toLowerCase())
+            );
+            if (foundKey) {
+              normalized[targetKey] = lead[foundKey];
+            }
+          }
+        });
+
+        return normalized as Lead;
+      });
+
+      // 3. Update cache
+      localStorage.setItem("LENSFLOW_CACHED_LEADS", JSON.stringify(normalizedLeads));
+      
+      return normalizedLeads;
     } catch (error) {
       console.error("Failed to fetch leads:", error);
-      return [];
+      return initialLeads;
     }
   }
 
