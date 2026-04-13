@@ -193,9 +193,11 @@ const LeadCard = ({ lead, onClick, onDelete }: { lead: Lead, onClick: () => void
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <CardTitle className="text-lg font-bold mt-2 leading-tight">{lead.clientName}</CardTitle>
+          <CardTitle className="text-lg font-bold mt-2 leading-tight">
+            {lead.clientName || lead.Name || lead.Client || 'Unnamed Client'}
+          </CardTitle>
           <CardDescription className="flex items-center gap-1.5 mt-1 font-medium">
-            <Calendar size={14} /> {lead.weddingDate || 'No Date Set'}
+            <Calendar size={14} /> {lead.weddingDate || lead.Date || lead.wedding_date || 'No Date Set'}
           </CardDescription>
         </CardHeader>
         <CardContent className="p-5 pt-2 space-y-3">
@@ -212,9 +214,9 @@ const LeadCard = ({ lead, onClick, onDelete }: { lead: Lead, onClick: () => void
           <div className="flex items-center justify-between pt-2 border-t border-border/50">
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">
-                {lead.designatedTo?.charAt(0) || '?'}
+                {(lead.designatedTo || lead.clientName || '?').charAt(0).toUpperCase()}
               </div>
-              <span className="text-xs font-medium text-muted-foreground">{lead.designatedTo}</span>
+              <span className="text-xs font-medium text-muted-foreground">{lead.designatedTo || 'Unassigned'}</span>
             </div>
             {lead.aiScore && (
               <div className="flex items-center gap-1">
@@ -254,7 +256,25 @@ function AppContent() {
   }, []);
 
   const loadLeads = async () => {
-    setIsLoading(true);
+    // 1. Check if we have cached data to show immediately
+    const cachedData = localStorage.getItem("LENSFLOW_CACHED_LEADS");
+    if (cachedData) {
+      try {
+        const parsed = JSON.parse(cachedData);
+        if (parsed.length > 0) {
+          setLeads(parsed);
+          // If we have cache, we don't show the full-screen loader
+          // but we might still want to fetch fresh data in the background
+        } else {
+          setIsLoading(true);
+        }
+      } catch (e) {
+        setIsLoading(true);
+      }
+    } else {
+      setIsLoading(true);
+    }
+
     const data = await sheetsService.fetchLeads();
     setLeads(data);
     setIsLoading(false);
@@ -369,6 +389,12 @@ function AppContent() {
           </div>
 
           <div className="flex items-center gap-3">
+            {isLoading && leads.length > 0 && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground animate-pulse mr-2">
+                <div className="w-2 h-2 rounded-full bg-primary" />
+                Refreshing...
+              </div>
+            )}
             <div className="flex bg-accent/50 p-1 rounded-xl border border-border/50">
               <Button 
                 variant={viewMode === 'grid' ? 'secondary' : 'ghost'} 
