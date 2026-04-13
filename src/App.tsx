@@ -25,7 +25,11 @@ import {
   Clock,
   MessageSquare,
   Copy,
-  Check
+  Check,
+  Table,
+  Columns,
+  Palette,
+  Webhook
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
@@ -57,8 +61,8 @@ import {
   SheetDescription 
 } from '@/components/ui/sheet';
 import { Toaster, toast } from 'sonner';
-import { Lead, ColumnDefinition, DEFAULT_COLUMNS, Note } from './types';
-import { sheetsService } from './services/googleSheetsService';
+import { Lead, ColumnDefinition, DEFAULT_COLUMNS, Note, AppConfig, StatusConfig } from './types';
+import { sheetsService, APPS_SCRIPT_TEMPLATE } from './services/googleSheetsService';
 import { analyzeLead, suggestFollowUp } from './services/geminiService';
 import { format } from 'date-fns';
 
@@ -151,13 +155,23 @@ const Sidebar = ({ activeTab, setActiveTab }: { activeTab: string, setActiveTab:
   );
 };
 
-const LeadCard = ({ lead, onClick, onDelete }: { lead: Lead, onClick: () => void, onDelete: () => void }) => {
-  const colorMap: Record<string, string> = {
-    'White': 'bg-slate-100 text-slate-800 border-slate-200',
-    'Red': 'bg-red-100 text-red-800 border-red-200',
-    'Dark Green': 'bg-emerald-100 text-emerald-800 border-emerald-200',
-    'Yellow': 'bg-yellow-100 text-yellow-800 border-yellow-200',
-  };
+const LeadCard = ({ 
+  lead, 
+  onClick, 
+  onDelete,
+  statuses
+}: { 
+  lead: Lead, 
+  onClick: () => void, 
+  onDelete: () => void,
+  statuses: StatusConfig[]
+}) => {
+  const currentStatus = statuses.find(s => s.label === lead.color);
+  const statusStyle = currentStatus ? {
+    backgroundColor: currentStatus.color,
+    color: '#1e293b', // Dark text for visibility
+    borderColor: 'rgba(0,0,0,0.1)'
+  } : {};
 
   return (
     <motion.div
@@ -171,7 +185,7 @@ const LeadCard = ({ lead, onClick, onDelete }: { lead: Lead, onClick: () => void
       <Card className="overflow-hidden cursor-pointer border-border/50 hover:border-primary/50 transition-all duration-300 hover:shadow-xl hover:shadow-primary/5 bg-card/50 backdrop-blur-sm" onClick={onClick}>
         <CardHeader className="p-5 pb-2">
           <div className="flex justify-between items-start">
-            <Badge variant="outline" className={`${colorMap[lead.color] || 'bg-accent'} border font-medium`}>
+            <Badge variant="outline" className="font-medium" style={statusStyle}>
               {lead.leadFrom}
             </Badge>
             <DropdownMenu>
@@ -231,6 +245,97 @@ const LeadCard = ({ lead, onClick, onDelete }: { lead: Lead, onClick: () => void
   );
 };
 
+const SpreadsheetView = ({ 
+  leads, 
+  columns, 
+  onUpdateField, 
+  onSelectLead 
+}: { 
+  leads: Lead[], 
+  columns: ColumnDefinition[], 
+  onUpdateField: (id: string, field: string, value: any) => void,
+  onSelectLead: (lead: Lead) => void
+}) => {
+  return (
+    <div className="bg-card rounded-3xl border border-border/50 overflow-hidden shadow-sm">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse min-w-[1200px]">
+          <thead>
+            <tr className="bg-accent/50 border-b border-border/50">
+              {columns.filter(c => c.visible).map(col => (
+                <th 
+                  key={col.id} 
+                  className="p-3 font-bold text-[10px] uppercase tracking-wider text-muted-foreground border-r border-border/30 last:border-r-0"
+                  style={{ width: col.width }}
+                >
+                  {col.label}
+                </th>
+              ))}
+              <th className="p-3 w-10"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {leads.map(lead => (
+              <tr key={lead.id} className="border-b border-border/30 hover:bg-accent/10 transition-colors group">
+                {columns.filter(c => c.visible).map(col => (
+                  <td 
+                    key={col.id} 
+                    className="p-0 border-r border-border/30 last:border-r-0 relative"
+                  >
+                    {col.type === 'select' ? (
+                      <select 
+                        className="w-full h-10 px-3 bg-transparent border-none focus:ring-2 focus:ring-primary/20 text-sm appearance-none cursor-pointer"
+                        value={lead[col.id] || ''}
+                        onChange={(e) => onUpdateField(lead.id, col.id, e.target.value)}
+                        style={{ 
+                          backgroundColor: col.colorMapping?.[lead[col.id]] || 'transparent',
+                          color: col.colorMapping?.[lead[col.id]] ? '#1e293b' : 'inherit'
+                        }}
+                      >
+                        <option value="">Select...</option>
+                        {col.options?.map(opt => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    ) : col.type === 'boolean' ? (
+                      <div className="flex items-center justify-center h-10">
+                        <input 
+                          type="checkbox" 
+                          checked={!!lead[col.id]} 
+                          onChange={(e) => onUpdateField(lead.id, col.id, e.target.checked)}
+                          className="w-4 h-4 rounded border-border text-primary focus:ring-primary/20"
+                        />
+                      </div>
+                    ) : (
+                      <input 
+                        type={col.type === 'number' ? 'number' : 'text'}
+                        className="w-full h-10 px-3 bg-transparent border-none focus:ring-2 focus:ring-primary/20 text-sm"
+                        value={lead[col.id] || ''}
+                        onChange={(e) => onUpdateField(lead.id, col.id, e.target.value)}
+                        onBlur={(e) => onUpdateField(lead.id, col.id, e.target.value)}
+                      />
+                    )}
+                  </td>
+                ))}
+                <td className="p-2 text-right">
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="rounded-lg h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => onSelectLead(lead)}
+                  >
+                    <ChevronRight size={16} />
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -243,8 +348,15 @@ export default function App() {
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState('leads');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'spreadsheet'>('spreadsheet');
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [columns, setColumns] = useState<ColumnDefinition[]>(DEFAULT_COLUMNS);
+  const [statuses, setStatuses] = useState<StatusConfig[]>([
+    { label: 'White', color: '#f1f5f9', textColor: '#1e293b' },
+    { label: 'Red', color: '#fee2e2', textColor: '#991b1b' },
+    { label: 'Dark Green', color: '#d1fae5', textColor: '#065f46' },
+    { label: 'Yellow', color: '#fef9c3', textColor: '#854d0e' },
+  ]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -252,8 +364,23 @@ function AppContent() {
   const [webAppUrl, setWebAppUrl] = useState(sheetsService.getWebAppUrl());
 
   useEffect(() => {
-    loadLeads();
+    loadInitialData();
   }, []);
+
+  const loadInitialData = async () => {
+    setIsLoading(true);
+    
+    // Load Config first
+    const config = await sheetsService.fetchConfig();
+    if (config) {
+      if (config.columns) setColumns(config.columns);
+      if (config.statuses) setStatuses(config.statuses);
+    }
+
+    // Load Leads
+    await loadLeads();
+    setIsLoading(false);
+  };
 
   const loadLeads = async () => {
     // 1. Check if we have cached data to show immediately
@@ -361,6 +488,38 @@ function AppContent() {
     });
   };
 
+  const handleUpdateLeadField = async (id: string, field: string, value: any) => {
+    const lead = leads.find(l => l.id === id);
+    if (!lead) return;
+    
+    const updatedLead = { ...lead, [field]: value };
+    setLeads(leads.map(l => l.id === id ? updatedLead : l));
+    
+    const success = await sheetsService.updateLead(updatedLead);
+    if (!success) {
+      toast.error('Failed to sync change to Google Sheets');
+      // Rollback on failure
+      setLeads(leads);
+    }
+  };
+
+  const handleSaveConfig = async (newColumns: ColumnDefinition[], newStatuses: StatusConfig[]) => {
+    setIsLoading(true);
+    const success = await sheetsService.saveConfig({
+      columns: newColumns,
+      statuses: newStatuses,
+      fbWebhookEnabled: true
+    });
+    if (success) {
+      setColumns(newColumns);
+      setStatuses(newStatuses);
+      toast.success('Configuration saved successfully');
+    } else {
+      toast.error('Failed to save configuration');
+    }
+    setIsLoading(false);
+  };
+
   const filteredLeads = leads.filter(l => 
     (l.clientName || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
     (l.location || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -395,24 +554,35 @@ function AppContent() {
                 Refreshing...
               </div>
             )}
-            <div className="flex bg-accent/50 p-1 rounded-xl border border-border/50">
-              <Button 
-                variant={viewMode === 'grid' ? 'secondary' : 'ghost'} 
-                size="icon" 
-                onClick={() => setViewMode('grid')}
-                className="rounded-lg h-9 w-9"
-              >
-                <Grid size={18} />
-              </Button>
-              <Button 
-                variant={viewMode === 'list' ? 'secondary' : 'ghost'} 
-                size="icon" 
-                onClick={() => setViewMode('list')}
-                className="rounded-lg h-9 w-9"
-              >
-                <List size={18} />
-              </Button>
-            </div>
+              <div className="flex bg-accent/50 p-1 rounded-xl border border-border/50">
+                <Button 
+                  variant={viewMode === 'spreadsheet' ? 'secondary' : 'ghost'} 
+                  size="icon" 
+                  onClick={() => setViewMode('spreadsheet')}
+                  className="rounded-lg h-9 w-9"
+                  title="Spreadsheet View"
+                >
+                  <Table size={18} />
+                </Button>
+                <Button 
+                  variant={viewMode === 'grid' ? 'secondary' : 'ghost'} 
+                  size="icon" 
+                  onClick={() => setViewMode('grid')}
+                  className="rounded-lg h-9 w-9"
+                  title="Grid View"
+                >
+                  <Grid size={18} />
+                </Button>
+                <Button 
+                  variant={viewMode === 'list' ? 'secondary' : 'ghost'} 
+                  size="icon" 
+                  onClick={() => setViewMode('list')}
+                  className="rounded-lg h-9 w-9"
+                  title="List View"
+                >
+                  <List size={18} />
+                </Button>
+              </div>
             
             <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
               <DialogTrigger 
@@ -505,12 +675,19 @@ function AppContent() {
                   </div>
                 </div>
 
-                {isLoading ? (
+                {isLoading && leads.length === 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                     {[1, 2, 3, 4].map(i => (
                       <div key={i} className="h-48 bg-accent/30 rounded-3xl animate-pulse border border-border/50" />
                     ))}
                   </div>
+                ) : viewMode === 'spreadsheet' ? (
+                  <SpreadsheetView 
+                    leads={filteredLeads} 
+                    columns={columns} 
+                    onUpdateField={handleUpdateLeadField}
+                    onSelectLead={setSelectedLead}
+                  />
                 ) : viewMode === 'grid' ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                     {filteredLeads.map(lead => (
@@ -519,6 +696,7 @@ function AppContent() {
                         lead={lead} 
                         onClick={() => setSelectedLead(lead)}
                         onDelete={() => handleDeleteLead(lead.id)}
+                        statuses={statuses}
                       />
                     ))}
                   </div>
@@ -690,25 +868,184 @@ function AppContent() {
                         onClick={() => {
                           sheetsService.setWebAppUrl(webAppUrl);
                           toast.success('Settings saved');
-                          loadLeads();
+                          loadInitialData();
                         }}
                       >
                         Save & Sync
                       </Button>
                     </div>
+                  </CardContent>
+                </Card>
 
+                <Card className="rounded-3xl border-border/50 shadow-sm bg-card/50 backdrop-blur-sm">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Columns size={20} className="text-primary" /> Column Manager
+                    </CardTitle>
+                    <CardDescription>
+                      Customize your spreadsheet columns. Add, remove, or rename them.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      {columns.map((col, idx) => (
+                        <div key={col.id} className="flex items-center gap-3 p-3 bg-accent/20 rounded-xl border border-border/30">
+                          <Input 
+                            value={col.label} 
+                            onChange={(e) => {
+                              const newCols = [...columns];
+                              newCols[idx].label = e.target.value;
+                              setColumns(newCols);
+                            }}
+                            className="h-9 rounded-lg flex-1"
+                          />
+                          <select 
+                            value={col.type}
+                            onChange={(e) => {
+                              const newCols = [...columns];
+                              newCols[idx].type = e.target.value as any;
+                              setColumns(newCols);
+                            }}
+                            className="h-9 rounded-lg border border-input bg-background px-2 text-xs"
+                          >
+                            <option value="text">Text</option>
+                            <option value="number">Number</option>
+                            <option value="date">Date</option>
+                            <option value="select">Dropdown</option>
+                            <option value="boolean">Checkbox</option>
+                          </select>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-destructive"
+                            onClick={() => setColumns(columns.filter((_, i) => i !== idx))}
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      className="w-full rounded-xl gap-2"
+                      onClick={() => setColumns([...columns, { 
+                        id: `col_${Date.now()}`, 
+                        label: 'New Column', 
+                        type: 'text', 
+                        visible: true,
+                        width: 150 
+                      }])}
+                    >
+                      <Plus size={14} /> Add Column
+                    </Button>
+                    <Button 
+                      className="w-full rounded-xl"
+                      onClick={() => handleSaveConfig(columns, statuses)}
+                    >
+                      Save Column Configuration
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                <Card className="rounded-3xl border-border/50 shadow-sm bg-card/50 backdrop-blur-sm">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Palette size={20} className="text-primary" /> Status & Color Manager
+                    </CardTitle>
+                    <CardDescription>
+                      Customize lead statuses and their background colors.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      {statuses.map((status, idx) => (
+                        <div key={idx} className="flex items-center gap-3 p-3 bg-accent/20 rounded-xl border border-border/30">
+                          <Input 
+                            value={status.label} 
+                            onChange={(e) => {
+                              const newStatuses = [...statuses];
+                              newStatuses[idx].label = e.target.value;
+                              setStatuses(newStatuses);
+                            }}
+                            className="h-9 rounded-lg flex-1"
+                          />
+                          <Input 
+                            type="color"
+                            value={status.color} 
+                            onChange={(e) => {
+                              const newStatuses = [...statuses];
+                              newStatuses[idx].color = e.target.value;
+                              setStatuses(newStatuses);
+                            }}
+                            className="h-9 w-12 p-1 rounded-lg border-none bg-transparent cursor-pointer"
+                          />
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-destructive"
+                            onClick={() => setStatuses(statuses.filter((_, i) => i !== idx))}
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      className="w-full rounded-xl gap-2"
+                      onClick={() => setStatuses([...statuses, { label: 'New Status', color: '#ffffff', textColor: '#000000' }])}
+                    >
+                      <Plus size={14} /> Add Status
+                    </Button>
+                    <Button 
+                      className="w-full rounded-xl"
+                      onClick={() => handleSaveConfig(columns, statuses)}
+                    >
+                      Save Status Configuration
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                <Card className="rounded-3xl border-border/50 shadow-sm bg-card/50 backdrop-blur-sm">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Webhook size={20} className="text-primary" /> Facebook Ads Webhook
+                    </CardTitle>
+                    <CardDescription>
+                      Use this URL in your Facebook Lead Ads webhook settings to automatically ingest leads.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="p-4 bg-accent/30 rounded-2xl border border-border/30 break-all font-mono text-xs">
+                      {webAppUrl ? `${webAppUrl}?action=webhook` : 'Setup Apps Script URL first'}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Note: You must select "POST" and "JSON" in your webhook provider.
+                    </p>
+                  </CardContent>
+                </Card>
+
+                <Card className="rounded-3xl border-border/50 shadow-sm bg-card/50 backdrop-blur-sm">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Clock size={20} className="text-primary" /> Setup Instructions
+                    </CardTitle>
+                    <CardDescription>
+                      Follow these steps to connect your Google Sheet.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
                     <div className="p-4 bg-accent/30 rounded-2xl border border-border/30 space-y-3">
                       <div className="flex items-center justify-between">
                         <h4 className="text-sm font-bold flex items-center gap-2">
-                          <Clock size={14} /> Setup Instructions
+                          <Copy size={14} /> Apps Script Template
                         </h4>
                         <Button 
                           variant="outline" 
                           size="sm" 
                           className="h-8 rounded-lg text-xs gap-2"
                           onClick={() => {
-                            const code = `function doGet(e) {\n  var action = e.parameter.action;\n  if (action == 'getLeads') {\n    return ContentService.createTextOutput(JSON.stringify({ leads: getLeadsFromSheet() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  }\n}\n\nfunction doPost(e) {\n  var data = JSON.parse(e.postData.contents);\n  var action = data.action;\n  \n  if (action == 'saveLead') {\n    saveLeadToSheet(data.lead);\n  } else if (action == 'updateLead') {\n    updateLeadInSheet(data.lead);\n  } else if (action == 'deleteLead') {\n    deleteLeadFromSheet(data.id);\n  }\n  \n  return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))\n    .setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction getLeadsFromSheet() {\n  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Leads');\n  if (!sheet) return [];\n  \n  var data = sheet.getDataRange().getValues();\n  var headers = data[0];\n  var leads = [];\n  \n  for (var i = 1; i < data.length; i++) {\n    var lead = {};\n    for (var j = 0; j < headers.length; j++) {\n      var key = headers[j].toString().toLowerCase().replace(/ /g, '');\n      if (headers[j] == 'Notes') {\n        try {\n          lead.notes = JSON.parse(data[i][j] || '[]');\n        } catch(e) {\n          lead.notes = [];\n        }\n      } else {\n        lead[key] = data[i][j];\n      }\n    }\n    leads.push(lead);\n  }\n  return leads;\n}\n\nfunction saveLeadToSheet(lead) {\n  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Leads');\n  if (!sheet) {\n    sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet('Leads');\n    sheet.appendRow(['ID', 'Date', 'Lead From', 'Color', 'Client Name', 'Number', 'Wedding Date', 'Month', 'Designated to', 'After Quote', 'WP Automation', 'Location', 'Budget', 'Function', 'Mail ID', 'Notes', 'AI Score', 'AI Summary']);\n  }\n  \n  sheet.appendRow([\n    lead.id,\n    lead.date,\n    lead.leadFrom,\n    lead.color,\n    lead.clientName,\n    lead.number,\n    lead.weddingDate,\n    lead.month,\n    lead.designatedTo,\n    lead.afterQuote,\n    lead.wpAutomation,\n    lead.location,\n    lead.budget,\n    lead.function,\n    lead.mailId,\n    JSON.stringify(lead.notes || []),\n    lead.aiScore || '',\n    lead.aiSummary || ''\n  ]);\n}\n\nfunction updateLeadInSheet(lead) {\n  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Leads');\n  var data = sheet.getDataRange().getValues();\n  for (var i = 1; i < data.length; i++) {\n    if (data[i][0] == lead.id) {\n      sheet.getRange(i + 1, 1, 1, 18).setValues([[\n        lead.id,\n        lead.date,\n        lead.leadFrom,\n        lead.color,\n        lead.clientName,\n        lead.number,\n        lead.weddingDate,\n        lead.month,\n        lead.designatedTo,\n        lead.afterQuote,\n        lead.wpAutomation,\n        lead.location,\n        lead.budget,\n        lead.function,\n        lead.mailId,\n        JSON.stringify(lead.notes || []),\n        lead.aiScore || '',\n        lead.aiSummary || ''\n      ]]);\n      break;\n    }\n  }\n}\n\nfunction deleteLeadFromSheet(id) {\n  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Leads');\n  var data = sheet.getDataRange().getValues();\n  for (var i = 1; i < data.length; i++) {\n    if (data[i][0] == id) {\n      sheet.deleteRow(i + 1);\n      break;\n    }\n  }\n}`;
-                            navigator.clipboard.writeText(code);
+                            navigator.clipboard.writeText(APPS_SCRIPT_TEMPLATE);
                             toast.success('Apps Script code copied to clipboard!');
                           }}
                         >
